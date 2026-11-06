@@ -94,7 +94,14 @@ void Internal::build_chain_for_empty () {
 
 /*------------------------------------------------------------------------*/
 
-inline void Internal::search_assign (int lit, Clause *reason) {
+// Version of 'search_assign' with the assignment level already known.
+// Used by 'propagate' where the level can be computed on the fly while
+// searching for a replacement watch (long clauses) or is simply the level
+// of the propagated literal (binary clauses), which avoids walking the
+// reason clause a second time (and touching binary clauses at all).
+
+inline void Internal::search_assign_level (int lit, Clause *reason,
+                                           int lit_level) {
 
   if (level)
     MODE_REQUIRE (SEARCH);
@@ -106,7 +113,6 @@ inline void Internal::search_assign (int lit, Clause *reason) {
   assert (!flags (idx).eliminated () || reason == decision_reason ||
           reason == external_reason);
   Var &v = var (idx);
-  int lit_level;
   assert (!lrat || level || reason == external_reason ||
           reason == decision_reason || !lrat_chain.empty ());
   // The following cases are explained in the two comments above before
@@ -119,12 +125,7 @@ inline void Internal::search_assign (int lit, Clause *reason) {
   // we can not calculate the real assignment level.
   // The function assignment_level () will also assign the current level
   // to literals with external reason.
-  if (!reason)
-    lit_level = 0; // unit
-  else if (reason == decision_reason)
-    lit_level = level, reason = 0;
-  else
-    lit_level = assignment_level (lit, reason);
+  assert (reason != decision_reason);
   if (!lit_level)
     reason = 0;
 
@@ -159,6 +160,17 @@ inline void Internal::search_assign (int lit, Clause *reason) {
     }
   }
   lrat_chain.clear ();
+}
+
+inline void Internal::search_assign (int lit, Clause *reason) {
+  int lit_level;
+  if (!reason)
+    lit_level = 0; // unit
+  else if (reason == decision_reason)
+    lit_level = level, reason = 0;
+  else
+    lit_level = assignment_level (lit, reason);
+  search_assign_level (lit, reason, lit_level);
 }
 
 /*------------------------------------------------------------------------*/
@@ -239,6 +251,7 @@ bool Internal::propagate () {
   while (!conflict && propagated != trail.size ()) {
 
     const int lit = -trail[propagated++];
+    const int lit_level = var (lit).level; // level of 'lit' for forcing
     LOG ("propagating %d", -lit);
     Watches &ws = watches (lit);
 
@@ -289,7 +302,7 @@ bool Internal::propagate () {
           conflict = w.clause; // but continue ...
         else {
           build_chain_for_units (w.blit, w.clause, 0);
-          search_assign (w.blit, w.clause);
+          search_assign_level (w.blit, w.clause, lit_level);
           // lrat_chain.clear (); done in search_assign
           ticks++;
         }
@@ -349,16 +362,25 @@ bool Internal::propagate () {
           LOG (w.clause, "search starting at %d", w.clause->pos);
           int r = 0;
           signed char v = -1;
+          int res = lit_level; // assignment level if the clause forces
 
-          while (k != end && (v = val (r = *k)) < 0)
+          while (k != end && (v = val (r = *k)) < 0) {
+            const int tmp = var (r).level;
+            if (tmp > res)
+              res = tmp;
             k++;
+          }
 
           if (v < 0) { // need second search starting at the head?
 
             k = lits + 2;
             assert (w.clause->pos <= size);
-            while (k != middle && (v = val (r = *k)) < 0)
+            while (k != middle && (v = val (r = *k)) < 0) {
+              const int tmp = var (r).level;
+              if (tmp > res)
+                res = tmp;
               k++;
+            }
           }
 
           w.clause->pos = k - lits; // always save position
@@ -395,7 +417,8 @@ bool Internal::propagate () {
             // assigned to false (still 'v < 0'), thus we found a unit.
             //
             build_chain_for_units (other, w.clause, 0);
-            search_assign (other, w.clause);
+            assert (res == assignment_level (other, w.clause));
+            search_assign_level (other, w.clause, res);
             // lrat_chain.clear (); done in search_assign
             ticks++;
 

@@ -758,6 +758,7 @@ struct Internal {
   void build_chain_for_units (int lit, Clause *reason, bool forced);
   void build_chain_for_empty ();
   void search_assign (int lit, Clause *);
+  void search_assign_level (int lit, Clause *, int lit_level);
   void search_assign_driving (int lit, Clause *reason);
   void search_assign_external (int lit);
   void search_assume_decision (int decision);
